@@ -8,18 +8,18 @@
 
 import Foundation
 
-internal protocol ServerInvocationHandler {
+internal protocol ServerInvocationHandler: Sendable {
     func createInvocationMessage(invocationId: String, method: String, arguments: [Encodable], streamIds: [String]?) -> HubMessage
     func processStreamItem(streamItemMessage: StreamItemMessage) -> Error?
     func processCompletion(completionMessage: CompletionMessage)
     func raiseError(error: Error)
 }
 
-internal class InvocationHandler<T: Decodable>: ServerInvocationHandler {
+internal final class InvocationHandler<T: Decodable & Sendable>: ServerInvocationHandler {
     private let logger: Logger
-    private let invocationDidComplete: (T?, Error?) -> Void
+    private let invocationDidComplete: @Sendable (T? , Error?) -> Void
 
-    init(logger: Logger, callbackQueue: DispatchQueue, invocationDidComplete: @escaping (T?, Error?) -> Void) {
+    init(logger: Logger, callbackQueue: DispatchQueue, invocationDidComplete: @Sendable @escaping (T?, Error?) -> Void) {
         self.logger = logger
         self.invocationDidComplete = {result, error in
             callbackQueue.async { invocationDidComplete(result, error)}
@@ -67,12 +67,12 @@ internal class InvocationHandler<T: Decodable>: ServerInvocationHandler {
     }
 }
 
-internal class StreamInvocationHandler<T: Decodable>: ServerInvocationHandler {
+internal final class StreamInvocationHandler<T: Decodable & Sendable>: ServerInvocationHandler {
     private let logger: Logger
-    private let streamItemReceived: (T) -> Void
-    private let invocationDidComplete: (Error?) -> Void
+    private let streamItemReceived: @Sendable (T) -> Void
+    private let invocationDidComplete: @Sendable (Error?) -> Void
 
-    init(logger: Logger, callbackQueue: DispatchQueue, streamItemReceived: @escaping (T) -> Void, invocationDidComplete: @escaping (Error?) -> Void) {
+    init(logger: Logger, callbackQueue: DispatchQueue, streamItemReceived: @Sendable @escaping (T) -> Void, invocationDidComplete: @Sendable @escaping (Error?) -> Void) {
         self.logger = logger
         self.streamItemReceived =  { item in callbackQueue.async { streamItemReceived(item) } }
         self.invocationDidComplete = { error in callbackQueue.async { invocationDidComplete(error) } }

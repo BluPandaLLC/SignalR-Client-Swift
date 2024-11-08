@@ -8,7 +8,7 @@
 
 import Foundation
 
-public enum LogLevel: Int {
+public enum LogLevel: Int, Sendable {
     case error = 1
     case warning = 2
     case info = 3
@@ -18,7 +18,7 @@ public enum LogLevel: Int {
 /**
  Protocol for implementing loggers.
  */
-public protocol Logger {
+public protocol Logger: Sendable {
     /**
      Invoked by the client to write a log entry.
 
@@ -42,7 +42,7 @@ public extension LogLevel {
 /**
  Logger that log entries with the `print()` function.
  */
-public class PrintLogger: Logger {
+public struct PrintLogger: Logger {
     let dateFormatter: DateFormatter
 
     /**
@@ -70,7 +70,7 @@ public class PrintLogger: Logger {
 /**
  Logger that discards all log entries.
  */
-public class NullLogger: Logger {
+public struct NullLogger: Logger {
     /**
      Initializes a `NullLogger`.
     */
@@ -86,8 +86,7 @@ public class NullLogger: Logger {
     public func log(logLevel: LogLevel, message: @autoclosure () -> String) {
     }
 }
-
-class FilteringLogger: Logger {
+struct FilteringLogger: Logger {
     private let minLogLevel: LogLevel
     private let logger: Logger
 

@@ -7,7 +7,7 @@
 //
 import Foundation
 
-internal class TransportDescription {
+internal final class TransportDescription: Sendable {
     let transportType: TransportType
     let transferFormats: [TransferFormat]
 
@@ -20,7 +20,7 @@ internal class TransportDescription {
 internal protocol NegotiationPayload {
 }
 
-internal class NegotiationResponse: NegotiationPayload {
+internal final class NegotiationResponse: NegotiationPayload, Sendable {
     let connectionId: String
     let connectionToken: String?
     let version: Int

@@ -9,7 +9,7 @@
 import Foundation
 
 @available(OSX 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
-public class WebsocketsTransport: NSObject, Transport, URLSessionWebSocketDelegate {
+public class WebsocketsTransport: NSObject, Transport, URLSessionWebSocketDelegate, @unchecked Sendable {
     private let logger: Logger
     private let dispatchQueue = DispatchQueue(label: "SignalR.webSocketTransport.queue")
     private var urlSession: URLSession?
@@ -25,7 +25,7 @@ public class WebsocketsTransport: NSObject, Transport, URLSessionWebSocketDelega
         self.logger = logger
     }
 
-    public func start(url: URL, options: HttpConnectionOptions) {
+    public func start(url: URL, options: HttpConnectionOptions) async {
         logger.log(logLevel: .info, message: "Starting WebSocket transport")
 
         authenticationChallengeHandler = options.authenticationChallengeHandler
@@ -35,14 +35,11 @@ public class WebsocketsTransport: NSObject, Transport, URLSessionWebSocketDelega
         setAccessToken(accessTokenProvider: options.accessTokenProvider, request: &request)
         urlSession = URLSession(configuration: .default, delegate: self, delegateQueue: OperationQueue())
         webSocketTask = urlSession!.webSocketTask(with: request)
-        if let maximumWebsocketMessageSize = options.maximumWebsocketMessageSize {
-            webSocketTask?.maximumMessageSize = maximumWebsocketMessageSize
-        }
-
+        
         webSocketTask!.resume()
     }
 
-    public func send(data: Data, sendDidComplete: @escaping (Error?) -> Void) {
+    public func send(data: Data, sendDidComplete: @Sendable @escaping (Error?) -> Void) async throws -> Void {
         let message = URLSessionWebSocketTask.Message.data(data)
         webSocketTask?.send(message, completionHandler: sendDidComplete)
     }
@@ -112,7 +109,7 @@ public class WebsocketsTransport: NSObject, Transport, URLSessionWebSocketDelega
 
         let statusCode = (webSocketTask?.response as? HTTPURLResponse)?.statusCode ?? -1
         logger.log(logLevel: .info, message: "Error starting webSocket. Error: \(error!), HttpStatusCode: \(statusCode), WebSocket closeCode: \(webSocketTask?.closeCode.rawValue ?? -1)")
-        delegate?.transportDidClose((statusCode != -1 && statusCode != 200) ? SignalRError.webError(statusCode: statusCode) : error)
+        delegate?.transportDidClose(error)
         shutdownTransport()
     }
 

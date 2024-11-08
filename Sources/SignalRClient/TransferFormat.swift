@@ -8,7 +8,7 @@
 
 import Foundation
 
-public enum TransferFormat: String {
+public enum TransferFormat: String, Sendable {
     case text = "Text"
     case binary = "Binary"
 }

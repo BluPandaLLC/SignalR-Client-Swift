@@ -12,7 +12,7 @@ public protocol Connection {
     var delegate: ConnectionDelegate? {get set}
     var inherentKeepAlive: Bool {get}
     var connectionId: String? {get}
-    func start() -> Void
-    func send(data: Data, sendDidComplete: @escaping (_ error: Error?) -> Void) -> Void
+    func start() async throws -> Void
+    func send(data: Data, sendDidComplete: @Sendable @escaping (_ error: Error?) -> Void) -> Void
     func stop(stopError: Error?) -> Void
 }

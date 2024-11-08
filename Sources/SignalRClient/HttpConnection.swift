@@ -8,7 +8,7 @@
 
 import Foundation
 
-public class HttpConnection: Connection {
+public class HttpConnection: Connection, @unchecked Sendable {
     private let connectionQueue: DispatchQueue
     private let startDispatchGroup: DispatchGroup
 
@@ -56,7 +56,7 @@ public class HttpConnection: Connection {
         logger.log(logLevel: .debug, message: "HttpConnection deinit")
     }
 
-    public func start() {
+    public func start() async throws {
         logger.log(logLevel: .info, message: "Starting connection")
 
         if changeState(from: .initial, to: .connecting) == nil {
@@ -72,31 +72,65 @@ public class HttpConnection: Connection {
             transport = try! self.transportFactory.createTransport(availableTransports: [TransportDescription(transportType: TransportType.webSockets, transferFormats: [TransferFormat.text, TransferFormat.binary])])
             startTransport(connectionId: nil, connectionToken: nil)
         } else {
-            negotiate(negotiateUrl: createNegotiateUrl(), accessToken: nil) { negotiationResponse in
+            
+            let negotiationResponse = try await negotiate(negotiateUrl: createNegotiateUrl(), accessToken: nil)
+            guard let nr = negotiationResponse else {
+                return
+            }
+            do {
+                self.transport = try self.transportFactory.createTransport(availableTransports: nr.availableTransports)
+            } catch {
+                self.logger.log(logLevel: .error, message: "Creating transport failed: \(error)")
+                self.failOpenWithError(error: error, changeState: true)
+                return
+            }
+
+            self.startTransport(connectionId: nr.connectionId, connectionToken: nr.connectionToken)
+
                 do {
-                    self.transport = try self.transportFactory.createTransport(availableTransports: negotiationResponse.availableTransports)
+                    let negotiationResponse = try await negotiate(negotiateUrl: createNegotiateUrl(), accessToken: nil)
+                    if let nr = negotiationResponse {
+                        self.transport = try self.transportFactory.createTransport(availableTransports: nr.availableTransports)
+                    }
                 } catch {
                     self.logger.log(logLevel: .error, message: "Creating transport failed: \(error)")
                     self.failOpenWithError(error: error, changeState: true)
                     return
                 }
 
-                self.startTransport(connectionId: negotiationResponse.connectionId, connectionToken: negotiationResponse.connectionToken)
-            }
+                self.startTransport(connectionId: nr.connectionId, connectionToken: nr.connectionToken)
         }
     }
-
-    private func negotiate(negotiateUrl: URL, accessToken: String?, negotiateDidComplete: @escaping (NegotiationResponse) -> Void) {
+    private actor nrActor {
+        var negotiationResponse = NegotiationResponse(connectionId: "", connectionToken: nil, version: 0, availableTransports: [])
+        
+        func updateNR(_ response: NegotiationResponse) {
+            negotiationResponse = response
+        }
+    }
+    private func negotiate(negotiateUrl: URL, accessToken: String?) async throws -> NegotiationResponse? {
         if let accessToken = accessToken {
             logger.log(logLevel: .debug, message: "Overriding accessToken")
             options.accessTokenProvider = { accessToken }
         }
 
         let httpClient = options.httpClientFactory(options)
-        httpClient.post(url: negotiateUrl, body: nil) {httpResponse, error in
-            if let e = error {
-                self.logger.log(logLevel: .error, message: "Negotiate failed due to: \(e))")
-                self.failOpenWithError(error: e, changeState: true)
+        
+        let httpResponse = try await httpClient.post(url: negotiateUrl, body: nil)
+        guard httpResponse != nil else {
+            self.logger.log(logLevel: .error, message: "Negotiate returned (nil) httpResponse")
+            self.failOpenWithError(error: SignalRError.invalidNegotiationResponse(message: "negotiate returned nil httpResponse."), changeState: true)
+            return nil
+        }
+        
+        let nrActor = nrActor()
+        Task {
+            var httpResponse: HttpResponse!
+            do {
+                httpResponse = try await httpClient.post(url: negotiateUrl, body: nil)
+            } catch {
+                self.logger.log(logLevel: .error, message: "Negotiate failed due to: \(error))")
+                self.failOpenWithError(error: error, changeState: true)
                 return
             }
 
@@ -119,10 +153,15 @@ public class HttpConnection: Connection {
                         self.url = redirection.url
                         var negotiateUrl = self.url
                         negotiateUrl.appendPathComponent("negotiate")
-                        self.negotiate(negotiateUrl: negotiateUrl, accessToken: redirection.accessToken, negotiateDidComplete: negotiateDidComplete)
-                    case let negotiationResponse as NegotiationResponse:
+                        
+                        let negotiationResponse = try await negotiate(negotiateUrl: negotiateUrl, accessToken: redirection.accessToken)
+                        if let nr = negotiationResponse {
+                            await nrActor.updateNR(nr)
+                        }
+                        return
+                    case _ as NegotiationResponse:
                         self.logger.log(logLevel: .debug, message: "Negotiation response received")
-                        negotiateDidComplete(negotiationResponse)
+                        return
                     default:
                         throw SignalRError.invalidNegotiationResponse(message: "internal error - unexpected negotiation payload")
                     }
@@ -135,6 +174,8 @@ public class HttpConnection: Connection {
                 self.failOpenWithError(error: SignalRError.webError(statusCode: httpResponse.statusCode), changeState: true)
             }
         }
+        
+        return await nrActor.negotiationResponse
     }
 
     private func startTransport(connectionId: String?, connectionToken: String?) {
@@ -148,7 +189,9 @@ public class HttpConnection: Connection {
         let startUrl = self.createStartUrl(connectionId: connectionToken ?? connectionId)
         self.transportDelegate = ConnectionTransportDelegate(connection: self, connectionId: connectionId)
         self.transport!.delegate = self.transportDelegate
-        self.transport!.start(url: startUrl, options: self.options)
+        Task {
+            await self.transport!.start(url: startUrl, options: self.options)
+        }
     }
 
     private func createNegotiateUrl() -> URL {
@@ -183,12 +226,12 @@ public class HttpConnection: Connection {
         }
 
         logger.log(logLevel: .debug, message: "Invoking connectionDidFailToOpen")
-        options.callbackQueue.async {
-            self.delegate?.connectionDidFailToOpen(error: error)
+        Task {
+            await self.delegate?.connectionDidFailToOpen(error: error)
         }
     }
 
-    public func send(data: Data, sendDidComplete: @escaping (_ error: Error?) -> Void) {
+    public func send(data: Data, sendDidComplete: @Sendable @escaping (_ error: Error?) -> Void) {
         logger.log(logLevel: .debug, message: "Sending data")
         guard state == .connected else {
             logger.log(logLevel: .error, message: "Sending data failed - connection not in the 'connected' state")
@@ -199,7 +242,9 @@ public class HttpConnection: Connection {
             }
             return
         }
-        transport!.send(data: data, sendDidComplete: sendDidComplete)
+        Task {
+            try await transport!.send(data: data, sendDidComplete: sendDidComplete)
+        }
     }
 
     public func stop(stopError: Error? = nil) {
@@ -226,8 +271,8 @@ public class HttpConnection: Connection {
         } else {
             logger.log(logLevel: .debug, message: "Connection being stopped before transport initialized")
             logger.log(logLevel: .debug, message: "Invoking connectionDidClose (\(#function): \(#line))")
-            options.callbackQueue.async {
-                self.delegate?.connectionDidClose(error: stopError)
+            Task {
+                await self.delegate?.connectionDidClose(error: stopError)
             }
         }
     }
@@ -242,8 +287,8 @@ public class HttpConnection: Connection {
         if  previousState != nil {
             logger.log(logLevel: .debug, message: "Invoking connectionDidOpen")
             self.connectionId = connectionId
-            options.callbackQueue.async {
-                self.delegate?.connectionDidOpen(connection: self)
+            Task {
+                await self.delegate?.connectionDidOpen(connection: self)
             }
         } else {
             logger.log(logLevel: .debug, message: "Connection is being stopped while the transport is starting")
@@ -252,8 +297,8 @@ public class HttpConnection: Connection {
 
     fileprivate func transportDidReceiveData(_ data: Data) {
         logger.log(logLevel: .debug, message: "Received data from transport")
-        options.callbackQueue.async {
-            self.delegate?.connectionDidReceiveData(connection: self, data: data)
+        Task {
+            await self.delegate?.connectionDidReceiveData(connection: self, data: data)
         }
     }
 
@@ -269,16 +314,16 @@ public class HttpConnection: Connection {
             startDispatchGroup.leave()
 
             logger.log(logLevel: .debug, message: "Invoking connectionDidFailToOpen")
-            options.callbackQueue.async {
-                self.delegate?.connectionDidFailToOpen(error: self.stopError ?? error!)
+            Task {
+                await self.delegate?.connectionDidFailToOpen(error: self.stopError ?? error!)
             }
         } else {
             logger.log(logLevel: .debug, message: "Invoking connectionDidClose (\(#function): \(#line))")
 
             self.connectionId = nil
 
-            options.callbackQueue.async {
-                self.delegate?.connectionDidClose(error: self.stopError ?? error)
+            Task {
+                await self.delegate?.connectionDidClose(error: self.stopError ?? error)
             }
         }
     }

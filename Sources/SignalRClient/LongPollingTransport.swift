@@ -8,7 +8,6 @@
 import Foundation
 
 public class LongPollingTransport: Transport {
-    
     public var delegate: TransportDelegate?
     
     private let logger: Logger
@@ -17,71 +16,78 @@ public class LongPollingTransport: Transport {
     private var active = false
     private var opened = false
     private var closeCalled = false
-    private var httpClient: HttpClientProtocol?
     private var url: URL?
     private var closeError: Error?
-
+    private var options: HttpConnectionOptions!
+    
     public let inherentKeepAlive = true
 
     init(logger: Logger) {
         self.logger = logger
     }
     
-    public func start(url: URL, options: HttpConnectionOptions) {
+    public func start(url: URL, options: HttpConnectionOptions) async {
         logger.log(logLevel: .info, message: "Starting LongPolling transport")
-        httpClient = options.httpClientFactory(options)
+        self.options = options
         self.url = url
         opened = false
         closeError = nil
         closeCalled = false
         active = true
-        triggerPoll()
+        await triggerPoll()
     }
     
-    public func send(data: Data, sendDidComplete: @escaping (Error?) -> Void) {
-        guard active, let httpClient = httpClient, let url = url else {
+    public func send(data: Data, sendDidComplete: @Sendable @escaping (Error?) -> Void) async throws {
+        guard active, let url = url else {
             sendDidComplete(SignalRError.invalidState)
             return
         }
-        httpClient.post(url: url, body: data) { (responseOptional, errorOptional) in
-            if let error = errorOptional {
-                sendDidComplete(error)
-            } else if let response = responseOptional {
-                if response.statusCode == 200 {
-                    sendDidComplete(nil)
-                } else {
-                    sendDidComplete(SignalRError.webError(statusCode: response.statusCode))
-                }
+        let httpClient = options.httpClientFactory(options)
+        let httpResponse = try await httpClient.post(url: url, body: data)
+        if let response = httpResponse {
+            if response.statusCode == 200 {
+                sendDidComplete(nil)
+            } else {
+                sendDidComplete(SignalRError.webError(statusCode: response.statusCode))
             }
         }
     }
     
     public func close() {
-        closeQueue.sync {
+        let httpClient = options.httpClientFactory(options)
+        Task {
             if !closeCalled {
                 closeCalled = true
                 active = false
                 self.logger.log(logLevel: .debug, message: "Sending LongPolling session DELETE request...")
-                self.httpClient?.delete(url: self.url!, completionHandler: { (_, errorOptional) in
-                    if let error = errorOptional {
+                
+                Task {
+                    do {
+                        let _ = try await httpClient.delete(url: self.url!)
+                    } catch {
                         self.logger.log(logLevel: .error, message: "Error while DELETE-ing long polling session: \(error)")
                         self.delegate?.transportDidClose(error)
-                    } else {
-                        self.logger.log(logLevel: .info, message: "LongPolling transport stopped.")
-                        self.delegate?.transportDidClose(self.closeError)
                     }
-                })
+                    self.logger.log(logLevel: .info, message: "LongPolling transport stopped.")
+                    self.delegate?.transportDidClose(self.closeError)
+                }
             } else {
                 self.logger.log(logLevel: .debug, message: "closeCalled flag is already set")
             }
         }
     }
     
-    private func triggerPoll() {
+    private func triggerPoll() async {
         if self.active {
             let pollUrl = self.getPollUrl()
             self.logger.log(logLevel: .debug, message: "Polling \(pollUrl)")
-            self.httpClient?.get(url: pollUrl, completionHandler: self.handlePollResponse(response:error:))
+            let httpClient = options.httpClientFactory(options)
+            do {
+                let _ = try await httpClient.get(url: pollUrl)
+            } catch {
+                
+            }
+            self.handlePollResponse(response: nil, error: nil)
         } else {
             self.logger.log(logLevel: .debug, message: "Long Polling transport polling complete.")
             self.close()
@@ -132,7 +138,9 @@ public class LongPollingTransport: Transport {
             }
         }
         
-        self.triggerPoll()
+        Task {
+            await self.triggerPoll()
+        }
     }
     
     

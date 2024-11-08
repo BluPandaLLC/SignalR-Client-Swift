@@ -21,7 +21,7 @@ public protocol HubProtocol {
     func writeMessage(message: HubMessage) throws -> Data
 }
 
-public enum MessageType: Int, Codable {
+public enum MessageType: Int, Codable, Sendable {
     case Invocation = 1
     case StreamItem = 2
     case Completion = 3
@@ -77,12 +77,12 @@ public class ServerInvocationMessage: HubMessage, Encodable {
     }
 }
 
-public class ClientInvocationMessage: HubMessage, Decodable {
+public class ClientInvocationMessage: HubMessage, Decodable, @unchecked Sendable {
     public let type = MessageType.Invocation
     public let target: String
     private var arguments: UnkeyedDecodingContainer?
 
-    public required init (from decoder: Decoder) throws {
+    required public init (from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         target = try container.decode(String.self, forKey: .target)
         if container.contains(.arguments) {
@@ -163,7 +163,7 @@ public class StreamItemMessage: HubMessage, Codable {
     }
 }
 
-public class CompletionMessage: HubMessage, Codable {
+public final class CompletionMessage: HubMessage, Codable, @unchecked Sendable {
     public let type = MessageType.Completion
     public let invocationId: String
     public let error: String?
@@ -209,7 +209,7 @@ public class CompletionMessage: HubMessage, Codable {
         }
     }
 
-    enum CodingKeys : String, CodingKey {
+    enum CodingKeys : String, CodingKey, Sendable {
         case type
         case invocationId
         case error
@@ -217,7 +217,7 @@ public class CompletionMessage: HubMessage, Codable {
     }
 }
 
-public class StreamInvocationMessage: HubMessage, Encodable {
+public final class StreamInvocationMessage: HubMessage, Encodable, @unchecked Sendable {
     public let type = MessageType.StreamInvocation
     public let invocationId: String
     public let target: String
@@ -263,7 +263,7 @@ public class CancelInvocationMessage: HubMessage, Encodable {
     }
 }
 
-public class PingMessage : HubMessage, Encodable {
+public final class PingMessage : HubMessage, Encodable, Sendable {
     public let type = MessageType.Ping
     private init() { }
 

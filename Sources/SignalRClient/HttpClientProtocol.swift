@@ -18,7 +18,7 @@ public protocol HttpClientProtocol {
      - parameter url: URL
      - parameter completionHandler: callback invoked after the HTTP request has been completed
      */
-    func get(url: URL, completionHandler: @escaping (HttpResponse?, Error?) -> Void)
+    func get(url: URL) async throws -> HttpResponse?
 
     /**
      Sends a `POST` HTTP request with body data.
@@ -27,8 +27,8 @@ public protocol HttpClientProtocol {
      - parameter body: Body data to send to server
      - parameter completionHandler: callback invoked after the HTTP request has been completed
      */
-    func post(url: URL, body: Data?, completionHandler: @escaping (HttpResponse?, Error?) -> Void)
-    
+    func post(url: URL, body: Data?) async throws -> HttpResponse?
+
     
     /**
      Sends a `DELETE` HTTP request.
@@ -36,6 +36,5 @@ public protocol HttpClientProtocol {
      - parameter url: URL
      - parameter completionHandler: callback invoked after the HTTP request has been completed
      */
-    func delete(url: URL, completionHandler: @escaping (HttpResponse?, Error?) -> Void)
-    
+    func delete(url: URL) async throws -> HttpResponse?
 }

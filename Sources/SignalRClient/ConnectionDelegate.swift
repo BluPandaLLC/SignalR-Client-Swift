@@ -9,12 +9,12 @@
 import Foundation
 
 public protocol ConnectionDelegate: AnyObject {
-    func connectionDidOpen(connection: Connection)
-    func connectionDidFailToOpen(error: Error)
-    func connectionDidReceiveData(connection: Connection, data: Data)
-    func connectionDidClose(error: Error?)
-    func connectionWillReconnect(error: Error)
-    func connectionDidReconnect()
+    func connectionDidOpen(connection: Connection) async
+    func connectionDidFailToOpen(error: Error) async
+    func connectionDidReceiveData(connection: Connection, data: Data) async
+    func connectionDidClose(error: Error?) async
+    func connectionWillReconnect(error: Error) async
+    func connectionDidReconnect() async
 }
 
 public extension ConnectionDelegate {
